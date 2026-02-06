@@ -1,14 +1,16 @@
 # ---------- Build stage ----------
 FROM registry.redhat.io/ubi8/openjdk-8 AS build
-WORKDIR /build
-COPY pom.xml .
-RUN mvn -B -e -C dependency:go-offline
+WORKDIR /opt/app-root/src
+# Copy pom first for caching
+COPY pom.xml ./
 COPY src ./src
-RUN mvn -B package -DskipTests
+# Build fat jar
+RUN mvn -B -DskipTests package
 # ---------- Runtime stage ----------
 FROM registry.redhat.io/ubi8/openjdk-8-runtime
 WORKDIR /app
-COPY --from=build /build/target/*jar /app/app.jar
+COPY --from=build /opt/app-root/src/target/*jar /app/app.jar
+# OpenShift arbitrary UID support
 RUN chgrp -R 0 /app && chmod -R g=u /app
 ENV JAVA_TOOL_OPTIONS="\
  -XX:+UnlockExperimentalVMOptions \
