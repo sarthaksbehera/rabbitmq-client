@@ -37,17 +37,23 @@ public class RabbitConsumer {
 
     boolean autoAck = false;
 
+    // after creating channel:
+    channel.queueDeclarePassive(queue);
+    System.out.println("Queue exists: " + queue);
+    
     DeliverCallback onMessage = (consumerTag, delivery) -> {
       long tag = delivery.getEnvelope().getDeliveryTag();
+      System.out.println("Got delivery tag=" + tag +
+          " redelivered=" + delivery.getEnvelope().isRedeliver() +
+          " bytes=" + delivery.getBody().length);
+    
       try {
         String msg = new String(delivery.getBody(), StandardCharsets.UTF_8);
-
         process(msg);
-
         channel.basicAck(tag, false);
       } catch (Exception e) {
         channel.basicNack(tag, false, false);
-        System.err.println("Failed processing message; nacked (requeue=false). " + e.getMessage());
+        System.err.println("Failed processing; nacked: " + e.getMessage());
       }
     };
 
