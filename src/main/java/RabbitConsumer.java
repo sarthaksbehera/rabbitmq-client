@@ -23,11 +23,15 @@ public class RabbitConsumer {
     factory.setPassword(pass);
     factory.setVirtualHost(vhost);
 
-    // Important in Kubernetes/OpenShift
+    // Kubernetes / OpenShift friendly settings
     factory.setAutomaticRecoveryEnabled(true);
     factory.setTopologyRecoveryEnabled(true);
-    factory.setNetworkRecoveryInterval(Duration.ofSeconds(5)); // backoff between reconnects
-    factory.setRequestedHeartbeat(30); // keeps connections healthy through proxies
+    factory.setNetworkRecoveryInterval(5000); // MUST be int for Java 8
+    factory.setRequestedHeartbeat(30);
+
+    // TLS (only if using AMQPS)
+    factory.useSslProtocol();
+    factory.enableHostnameVerification();
 
     Connection connection = factory.newConnection("rabbit-consumer");
     Channel channel = connection.createChannel();
