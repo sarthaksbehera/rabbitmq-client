@@ -10,7 +10,7 @@ public class RabbitConsumer {
     String user = mustEnv("RABBIT_USERNAME");
     String pass = mustEnv("RABBIT_PASSWORD");
     String vhost = env("RABBIT_VHOST", "e-star-trades");
-    String queue = env("RABBIT_QUEUE", "INTERNALMARKET.TRADES.INTERNAL");
+    String queue = env("RABBIT_QUEUE", "INTERNALMARKET.TRADES.INSTATUS");
     int prefetch = Integer.parseInt(env("RABBIT_PREFETCH", "50"));
 
     ConnectionFactory factory = new ConnectionFactory();
