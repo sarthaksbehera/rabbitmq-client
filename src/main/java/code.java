@@ -9,11 +9,11 @@ public class RabbitConsumer {
 
   public static void main(String[] args) throws Exception {
     String host = mustEnv("RABBIT_HOST");
-    int port = Integer.parseInt(env("RABBIT_PORT", "5672"));
+    int port = Integer.parseInt(env("RABBIT_PORT", "5671"));
     String user = mustEnv("RABBIT_USERNAME");
     String pass = mustEnv("RABBIT_PASSWORD");
-    String vhost = env("RABBIT_VHOST", "/");
-    String queue = env("RABBIT_QUEUE", "my-queue");
+    String vhost = env("RABBIT_VHOST", "e-star-trades");
+    String queue = env("RABBIT_QUEUE", "INTERNALMARKET.TRADES.INTERNAL");
     int prefetch = Integer.parseInt(env("RABBIT_PREFETCH", "50"));
 
     ConnectionFactory factory = new ConnectionFactory();
