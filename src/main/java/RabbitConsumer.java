@@ -86,12 +86,12 @@ public class RabbitConsumer {
 
   private static String mustEnv(String k) {
     String v = System.getenv(k);
-    if (v == null || v.isBlank()) throw new IllegalStateException("Missing env var: " + k);
+    if (v == null || isBlank(v)) throw new IllegalStateException("Missing env var: " + k);
     return v;
   }
 
   private static String env(String k, String def) {
     String v = System.getenv(k);
-    return (v == null || v.isBlank()) ? def : v;
+    return (v == null || isBlank(v)) ? def : v;
   }
 }
