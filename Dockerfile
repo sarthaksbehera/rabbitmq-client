@@ -26,8 +26,12 @@ FROM registry.redhat.io/ubi8/openjdk-8-runtime
 WORKDIR /app
 COPY --from=build /opt/app-root/src/target/*.jar /app/app.jar
 
-# OpenShift arbitrary UID support
+# Need root at build-time to chgrp/chmod
+USER root
 RUN chgrp -R 0 /app && chmod -R g=u /app
+
+# Optional: run as non-root by default (OpenShift will still use random UID)
+USER 1001
 
 ENV JAVA_TOOL_OPTIONS="\
   -XX:MaxRAMPercentage=75 \
