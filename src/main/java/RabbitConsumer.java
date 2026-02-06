@@ -1,9 +1,6 @@
 import com.rabbitmq.client.*;
 
-import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.time.Duration;
-import java.util.concurrent.TimeoutException;
 
 public class RabbitConsumer {
 
@@ -26,17 +23,16 @@ public class RabbitConsumer {
     // Kubernetes / OpenShift friendly settings
     factory.setAutomaticRecoveryEnabled(true);
     factory.setTopologyRecoveryEnabled(true);
-    factory.setNetworkRecoveryInterval(5000); // MUST be int for Java 8
+    factory.setNetworkRecoveryInterval(5000); // milliseconds (Java 8)
     factory.setRequestedHeartbeat(30);
 
-    // TLS (only if using AMQPS)
+    // TLS (AMQPS)
     factory.useSslProtocol();
     factory.enableHostnameVerification();
 
     Connection connection = factory.newConnection("rabbit-consumer");
     Channel channel = connection.createChannel();
 
-    // Limit in-flight messages per consumer
     channel.basicQos(prefetch);
 
     boolean autoAck = false;
@@ -46,24 +42,20 @@ public class RabbitConsumer {
       try {
         String msg = new String(delivery.getBody(), StandardCharsets.UTF_8);
 
-        // ---- your processing here ----
         process(msg);
-        // ------------------------------
 
         channel.basicAck(tag, false);
       } catch (Exception e) {
-        // Avoid poison-message loops: requeue=false (use DLQ on broker side)
         channel.basicNack(tag, false, false);
-        // Optional: log
         System.err.println("Failed processing message; nacked (requeue=false). " + e.getMessage());
       }
     };
 
-    CancelCallback onCancel = consumerTag -> System.err.println("Consumer cancelled: " + consumerTag);
+    CancelCallback onCancel =
+        consumerTag -> System.err.println("Consumer cancelled: " + consumerTag);
 
     String consumerTag = channel.basicConsume(queue, autoAck, onMessage, onCancel);
 
-    // Graceful shutdown: stop consuming, close channel/connection
     Runtime.getRuntime().addShutdownHook(new Thread(() -> {
       try {
         System.err.println("Shutdown requested. Cancelling consumer...");
@@ -75,23 +67,26 @@ public class RabbitConsumer {
     }));
 
     System.out.println("Consuming from queue: " + queue);
-    // Keep process alive (main thread can just block)
     Thread.currentThread().join();
   }
 
   private static void process(String msg) {
-    // TODO real work
     System.out.println("Received: " + msg);
+  }
+
+  // Java 8 replacement for String.isBlank()
+  private static boolean isBlank(String s) {
+    return s == null || s.trim().isEmpty();
   }
 
   private static String mustEnv(String k) {
     String v = System.getenv(k);
-    if (v == null || isBlank(v)) throw new IllegalStateException("Missing env var: " + k);
+    if (isBlank(v)) throw new IllegalStateException("Missing env var: " + k);
     return v;
   }
 
   private static String env(String k, String def) {
     String v = System.getenv(k);
-    return (v == null || isBlank(v)) ? def : v;
+    return isBlank(v) ? def : v;
   }
 }
