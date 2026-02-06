@@ -33,9 +33,6 @@ RUN chgrp -R 0 /app && chmod -R g=u /app
 # Optional: run as non-root by default (OpenShift will still use random UID)
 USER 1001
 
-ENV JAVA_TOOL_OPTIONS="\
-  -XX:MaxRAMPercentage=75 \
-  -Djava.security.egd=file:/dev/urandom \
-"
+ENV JAVA_TOOL_OPTIONS="-Djava.security.egd=file:/dev/urandom"
 
 ENTRYPOINT ["java","-jar","/app/app.jar"]
