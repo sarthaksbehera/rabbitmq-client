@@ -53,7 +53,7 @@ http://maven.apache.org/xsd/maven-4.0.0.xsd">
 <transformer
                  implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
 <!-- Main class -->
-<mainClass>code</mainClass>
+<mainClass>RabbitConsumer</mainClass>
 </transformer>
 </transformers>
 </configuration>
