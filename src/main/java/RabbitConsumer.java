@@ -111,7 +111,7 @@ public class RabbitConsumer {
           channel.basicNack(tag, false, false);
           System.err.println("Non-transient DB error. NACK requeue=false. event_key=" + eventKey + " err=" + e.getMessage());
         }
-      
+      }
       catch (Exception e) {
         channel.basicNack(tag, false, false);
         System.err.println("Failed processing; nacked: " + e.getMessage());
