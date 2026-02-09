@@ -122,3 +122,9 @@ public class RabbitConsumer {
     return isBlank(v) ? def : v;
   }
 }
+
+private static String headerValueToString(Object v) {
+  if (v == null) return "null";
+  if (v instanceof byte[]) return new String((byte[]) v, StandardCharsets.UTF_8);
+  return v.toString();
+}
