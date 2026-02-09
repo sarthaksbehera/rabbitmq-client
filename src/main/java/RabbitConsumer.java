@@ -1,11 +1,16 @@
 import com.rabbitmq.client.*;
 import java.util.Map;
-
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
 import java.nio.charset.StandardCharsets;
 
 public class RabbitConsumer {
 
+ private static HikariDataSource dataSource;
+  
   public static void main(String[] args) throws Exception {
+
+    dataSource = buildDataSource();
     String host = mustEnv("RABBIT_HOST");
     int port = Integer.parseInt(env("RABBIT_PORT", "5671"));
     String user = mustEnv("RABBIT_USERNAME");
@@ -74,13 +79,44 @@ public class RabbitConsumer {
   // Routing/queue metadata (not AMQP headers, but often useful)
   System.out.println("exchange=" + delivery.getEnvelope().getExchange());
   System.out.println("routingKey=" + delivery.getEnvelope().getRoutingKey());     
+
+
+         String eventKey = props.getMessageId();
+      if (eventKey == null) {
+        Object tradeIdHeader = headers != null ? headers.get("tradeId") : null;
+        if (tradeIdHeader != null) {
+          eventKey = headerValueToString(tradeIdHeader);
+        }
+      }
+      if (eventKey == null) {
+        eventKey = "rk:" + delivery.getEnvelope().getRoutingKey() + "|tag:" + tag;
+      }
         
         process(msg);
+        persistEvent(eventKey, headers, msg);
         channel.basicAck(tag, false);
-      } catch (Exception e) {
+        System.out.println("Persisted + ACKed event_key=" + eventKey);
+      } 
+      catch (PSQLException e) {
+        // Unique violation => already stored (redelivery), safe to ACK
+        if (isUniqueViolation(e)) {
+          channel.basicAck(tag, false);
+          System.out.println("Duplicate event_key=" + eventKey + " (already persisted). ACKed.");
+        } else if (isTransientDbProblem(e)) {
+          // transient DB issue => requeue for retry
+          channel.basicNack(tag, false, true);
+          System.err.println("Transient DB error. NACK requeue=true. event_key=" + eventKey + " err=" + e.getMessage());
+        } else {
+          // non-transient DB error => don't loop forever; send to DLQ if configured
+          channel.basicNack(tag, false, false);
+          System.err.println("Non-transient DB error. NACK requeue=false. event_key=" + eventKey + " err=" + e.getMessage());
+        }
+      
+      catch (Exception e) {
         channel.basicNack(tag, false, false);
         System.err.println("Failed processing; nacked: " + e.getMessage());
       }
+      
     };
 
     CancelCallback onCancel =
@@ -127,6 +163,95 @@ private static String headerValueToString(Object v) {
   if (v instanceof byte[]) return new String((byte[]) v, StandardCharsets.UTF_8);
   return v.toString();
 }
+
+  // ----------------- DB -----------------
+
+  private static void persistEvent(String eventKey, Map<String, Object> headers, String msg) throws SQLException {
+    // Table schema expected:
+    // incoming_events(event_key TEXT UNIQUE, headers JSONB, payload_xml TEXT)
+    String sql = """
+      INSERT INTO incoming_events(event_key, headers, payload_xml)
+      VALUES (?, ?::jsonb, ?)
+      """;
+
+    try (Connection c = dataSource.getConnection()) {
+      c.setAutoCommit(false);
+      try (PreparedStatement ps = c.prepareStatement(sql)) {
+        ps.setString(1, eventKey);
+        ps.setString(2, headersToJson(headers));
+        ps.setString(3, msg);
+        ps.executeUpdate();
+      }
+      c.commit();
+    }
+  }
+
+  private static HikariDataSource buildDataSource() {
+    HikariConfig cfg = new HikariConfig();
+    cfg.setJdbcUrl(mustEnv("jdbc:postgresql://vsemxkph354706231380.ceas0akte0b1.eu-west-1.rds.amazonaws.com:5432/dbo"));          // jdbc:postgresql://host:5432/db
+    cfg.setUsername(mustEnv("impownerbs1"));
+    cfg.setPassword(mustEnv("hbSF0INu8:W7Vk4qQt1kz1LrNcjFuQ"));
+    cfg.setMaximumPoolSize(Integer.parseInt(env("PG_POOL_SIZE", "10")));
+    cfg.setConnectionTimeout(10_000);
+    cfg.setIdleTimeout(60_000);
+    cfg.setMaxLifetime(30 * 60_000);
+    return new HikariDataSource(cfg);
+  }
+
+  // ----------------- Helpers -----------------
+
+  private static boolean isUniqueViolation(PSQLException e) {
+    // Postgres UNIQUE violation SQLSTATE = 23505
+    return "23505".equals(e.getSQLState());
+  }
+
+  private static boolean isTransientDbProblem(PSQLException e) {
+    // Common transient classes:
+    // 08xxx = connection exceptions
+    // 40xxx = transaction rollback (serialization/deadlock)
+    String state = e.getSQLState();
+    if (state == null) return false;
+    return state.startsWith("08") || state.startsWith("40") || "57P01".equals(state); // admin shutdown
+  }
+
+  private static String headersToJson(Map<String, Object> headers) {
+    if (headers == null || headers.isEmpty()) return "{}";
+
+    StringBuilder sb = new StringBuilder("{");
+    boolean first = true;
+
+    for (var e : headers.entrySet()) {
+      if (!first) sb.append(",");
+      first = false;
+
+      sb.append("\"").append(escapeJson(e.getKey())).append("\":");
+
+      Object v = e.getValue();
+      if (v == null) {
+        sb.append("null");
+      } else if (v instanceof Number || v instanceof Boolean) {
+        sb.append(v);
+      } else if (v instanceof byte[]) {
+        sb.append("\"").append(escapeJson(new String((byte[]) v, StandardCharsets.UTF_8))).append("\"");
+      } else {
+        sb.append("\"").append(escapeJson(v.toString())).append("\"");
+      }
+    }
+
+    sb.append("}");
+    return sb.toString();
+  }
+
+  private static String escapeJson(String s) {
+    return s
+      .replace("\\", "\\\\")
+      .replace("\"", "\\\"")
+      .replace("\n", "\\n")
+      .replace("\r", "\\r")
+      .replace("\t", "\\t");
+  }
+
+  
   
 }
 
