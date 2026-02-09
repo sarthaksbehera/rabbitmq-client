@@ -1,4 +1,5 @@
 import com.rabbitmq.client.*;
+import java.util.Map;
 
 import java.nio.charset.StandardCharsets;
 
@@ -49,6 +50,31 @@ public class RabbitConsumer {
     
       try {
         String msg = new String(delivery.getBody(), StandardCharsets.UTF_8);
+        AMQP.BasicProperties props = delivery.getProperties();
+
+  // Headers
+  Map<String, Object> headers = props.getHeaders(); // can be null
+
+  if (headers != null) {
+    headers.forEach((k, v) -> {
+      System.out.println("Header " + k + " = " + headerValueToString(v));
+    });
+  } else {
+    System.out.println("No headers present");
+  }
+
+  // Other useful fields you might call “headers”
+  System.out.println("contentType=" + props.getContentType());
+  System.out.println("correlationId=" + props.getCorrelationId());
+  System.out.println("messageId=" + props.getMessageId());
+  System.out.println("timestamp=" + props.getTimestamp());
+  System.out.println("type=" + props.getType());
+  System.out.println("appId=" + props.getAppId());
+
+  // Routing/queue metadata (not AMQP headers, but often useful)
+  System.out.println("exchange=" + delivery.getEnvelope().getExchange());
+  System.out.println("routingKey=" + delivery.getEnvelope().getRoutingKey());     
+        
         process(msg);
         channel.basicAck(tag, false);
       } catch (Exception e) {
