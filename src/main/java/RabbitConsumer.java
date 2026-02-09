@@ -169,10 +169,7 @@ private static String headerValueToString(Object v) {
   private static void persistEvent(String eventKey, Map<String, Object> headers, String msg) throws SQLException {
     // Table schema expected:
     // incoming_events(event_key TEXT UNIQUE, headers JSONB, payload_xml TEXT)
-    String sql = "";
-      INSERT INTO incoming_events(event_key, headers, payload_xml)
-      VALUES (?, ?::jsonb, ?)
-      """;
+    String sql = "INSERT INTO incoming_events(event_key, headers, payload_xml) VALUES (?, ?::jsonb, ?)";
 
     try (Connection c = dataSource.getConnection()) {
       c.setAutoCommit(false);
