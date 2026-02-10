@@ -1,46 +1,53 @@
 import com.rabbitmq.client.*;
-import java.util.Map;
+
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
-import java.nio.charset.StandardCharsets;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import org.postgresql.util.PGobject;
+import org.postgresql.util.PSQLException;
+
 import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.sql.SQLException;
 import java.util.Base64;
 import java.util.HashMap;
-import org.postgresql.util.PGobject;
-import org.postgresql.util.PSQLException;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import java.util.Map;
 
 public class RabbitConsumer {
 
- private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
- private static HikariDataSource dataSource;
+  private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+  private static HikariDataSource dataSource;
 
-private static final String INSERT_SQL = loadSql("/sql/insert_incoming_event.sql");
+  private static final String INSERT_SQL = loadSql("/sql/insert_incoming_event.sql");
 
-private static byte[] readAllBytesJava8(InputStream is) throws java.io.IOException {
-  java.io.ByteArrayOutputStream buffer = new java.io.ByteArrayOutputStream();
-  byte[] data = new byte[8192];
-  int nRead;
-  while ((nRead = is.read(data, 0, data.length)) != -1) {
-    buffer.write(data, 0, nRead);
+  // ----------- Java 8 helper (InputStream.readAllBytes replacement) -----------
+  private static byte[] readAllBytesJava8(InputStream is) throws java.io.IOException {
+    java.io.ByteArrayOutputStream buffer = new java.io.ByteArrayOutputStream();
+    byte[] data = new byte[8192];
+    int nRead;
+    while ((nRead = is.read(data, 0, data.length)) != -1) {
+      buffer.write(data, 0, nRead);
+    }
+    return buffer.toByteArray();
   }
-  return buffer.toByteArray();
-}
- 
-private static String loadSql(String resourcePath) {
-  try (InputStream is = RabbitConsumer.class.getResourceAsStream(resourcePath)) {
-    if (is == null) throw new IllegalStateException("SQL resource not found: " + resourcePath);
-    return new String(readAllBytesJava8(is), java.nio.charset.StandardCharsets.UTF_8);
-  } catch (Exception e) {
-    throw new RuntimeException("Failed to load SQL: " + resourcePath, e);
-  }
-}
 
+  private static String loadSql(String resourcePath) {
+    try (InputStream is = RabbitConsumer.class.getResourceAsStream(resourcePath)) {
+      if (is == null) throw new IllegalStateException("SQL resource not found: " + resourcePath);
+      return new String(readAllBytesJava8(is), StandardCharsets.UTF_8);
+    } catch (Exception e) {
+      throw new RuntimeException("Failed to load SQL: " + resourcePath, e);
+    }
+  }
 
   public static void main(String[] args) throws Exception {
 
+    // ---- DB pool ----
     dataSource = buildDataSource();
+
+    // ---- RabbitMQ connection ----
     String host = mustEnv("RABBIT_HOST");
     int port = Integer.parseInt(env("RABBIT_PORT", "5671"));
     String user = mustEnv("RABBIT_USERNAME");
@@ -56,103 +63,89 @@ private static String loadSql(String resourcePath) {
     factory.setPassword(pass);
     factory.setVirtualHost(vhost);
 
-    // Kubernetes / OpenShift friendly settings
+    // OpenShift-friendly settings (Java 8)
     factory.setAutomaticRecoveryEnabled(true);
     factory.setTopologyRecoveryEnabled(true);
-    factory.setNetworkRecoveryInterval(5000); // milliseconds (Java 8)
+    factory.setNetworkRecoveryInterval(5000); // ms
     factory.setRequestedHeartbeat(30);
 
     // TLS (AMQPS)
     factory.useSslProtocol();
     factory.enableHostnameVerification();
 
-    com.rabbitmq.client.Connection connection = factory.newConnection("rabbit-consumer");
-    com.rabbitmq.client.Channel channel = connection.createChannel();
+    final com.rabbitmq.client.Connection rmqConn = factory.newConnection("rabbit-consumer");
+    final com.rabbitmq.client.Channel channel = rmqConn.createChannel();
 
     channel.basicQos(prefetch);
 
-    boolean autoAck = false;
-
-    // after creating channel:
+    // Ensure queue exists (will throw if not)
     channel.queueDeclarePassive(queue);
     System.out.println("Queue exists: " + queue);
-    
+
     DeliverCallback onMessage = (consumerTag, delivery) -> {
       long tag = delivery.getEnvelope().getDeliveryTag();
-      System.out.println("Got delivery tag=" + tag +
-          " redelivered=" + delivery.getEnvelope().isRedeliver() +
-          " bytes=" + delivery.getBody().length);
-    
+
+      AMQP.BasicProperties props = delivery.getProperties();
+      Map<String, Object> headers = props.getHeaders();
+
+      // Declare eventKey OUTSIDE try so catch blocks can use it
+      String eventKey = null;
+
       try {
         String msg = new String(delivery.getBody(), StandardCharsets.UTF_8);
-        AMQP.BasicProperties props = delivery.getProperties();
 
-  // Headers
-  Map<String, Object> headers = props.getHeaders(); // can be null
+        // ---- Determine idempotency key ----
+        eventKey = props.getMessageId();
 
-  if (headers != null) {
-    headers.forEach((k, v) -> {
-      System.out.println("Header " + k + " = " + headerValueToString(v));
-    });
-  } else {
-    System.out.println("No headers present");
-  }
-
-  // Other useful fields you might call “headers”
-  System.out.println("contentType=" + props.getContentType());
-  System.out.println("correlationId=" + props.getCorrelationId());
-  System.out.println("messageId=" + props.getMessageId());
-  System.out.println("timestamp=" + props.getTimestamp());
-  System.out.println("type=" + props.getType());
-  System.out.println("appId=" + props.getAppId());
-
-  // Routing/queue metadata (not AMQP headers, but often useful)
-  System.out.println("exchange=" + delivery.getEnvelope().getExchange());
-  System.out.println("routingKey=" + delivery.getEnvelope().getRoutingKey());     
-
-
-  final String eventKey = props.getMessageId();
-      if (eventKey == null) {
-        Object tradeIdHeader = headers != null ? headers.get("tradeId") : null;
-        if (tradeIdHeader != null) {
-          eventKey = headerValueToString(tradeIdHeader);
+        if (eventKey == null && headers != null) {
+          Object tradeIdHeader = headers.get("tradeId");
+          if (tradeIdHeader != null) {
+            eventKey = headerValueToString(tradeIdHeader);
+          }
         }
-      }
-      if (eventKey == null) {
-        eventKey = "rk:" + delivery.getEnvelope().getRoutingKey() + "|tag:" + tag;
-      }
-        
-        process(msg);
+
+        if (eventKey == null) {
+          eventKey = "rk:" + delivery.getEnvelope().getRoutingKey() + "|tag:" + tag;
+        }
+
+        // (Optional) logging
+        System.out.println("Received tag=" + tag +
+            " redelivered=" + delivery.getEnvelope().isRedeliver() +
+            " eventKey=" + eventKey +
+            " bytes=" + delivery.getBody().length);
+
+        // ---- Persist FIRST, then ACK ----
         persistEvent(eventKey, headers, msg);
         channel.basicAck(tag, false);
+
         System.out.println("Persisted + ACKed event_key=" + eventKey);
-      } 
-      catch (PSQLException e) {
+
+      } catch (PSQLException e) {
         // Unique violation => already stored (redelivery), safe to ACK
         if (isUniqueViolation(e)) {
           channel.basicAck(tag, false);
           System.out.println("Duplicate event_key=" + eventKey + " (already persisted). ACKed.");
         } else if (isTransientDbProblem(e)) {
-          // transient DB issue => requeue for retry
+          // transient DB issue => retry
           channel.basicNack(tag, false, true);
           System.err.println("Transient DB error. NACK requeue=true. event_key=" + eventKey + " err=" + e.getMessage());
         } else {
-          // non-transient DB error => don't loop forever; send to DLQ if configured
+          // non-transient => DLQ if configured
           channel.basicNack(tag, false, false);
           System.err.println("Non-transient DB error. NACK requeue=false. event_key=" + eventKey + " err=" + e.getMessage());
         }
-      }
-      catch (Exception e) {
+
+      } catch (Exception e) {
+        // Processing error: decide retry/DLQ
         channel.basicNack(tag, false, false);
-        System.err.println("Failed processing; nacked: " + e.getMessage());
+        System.err.println("Failed processing; NACK requeue=false. event_key=" + eventKey + " err=" + e.getMessage());
       }
-      
     };
 
-    CancelCallback onCancel =
-        consumerTag -> System.err.println("Consumer cancelled: " + consumerTag);
+    CancelCallback onCancel = consumerTag ->
+        System.err.println("Consumer cancelled: " + consumerTag);
 
-    String consumerTag = channel.basicConsume(queue, autoAck, onMessage, onCancel);
+    final String consumerTag = channel.basicConsume(queue, false, onMessage, onCancel);
 
     Runtime.getRuntime().addShutdownHook(new Thread(() -> {
       try {
@@ -161,15 +154,81 @@ private static String loadSql(String resourcePath) {
       } catch (Exception ignored) {}
 
       try { channel.close(); } catch (Exception ignored) {}
-      try { .close(); } catch (Exception ignored) {}
+      try { rmqConn.close(); } catch (Exception ignored) {}
+      try { dataSource.close(); } catch (Exception ignored) {}
     }));
 
     System.out.println("Consuming from queue: " + queue);
     Thread.currentThread().join();
   }
 
-  private static void process(String msg) {
-    System.out.println("Received: " + msg);
+  // ----------------- DB -----------------
+
+  private static void persistEvent(String eventKey, Map<String, Object> headers, String msg) throws SQLException {
+    PGobject jsonb = new PGobject();
+    jsonb.setType("jsonb");
+    jsonb.setValue(headersToJson(headers)); // valid JSON
+
+    try (java.sql.Connection dbConn = dataSource.getConnection()) {
+      dbConn.setAutoCommit(false);
+      try (java.sql.PreparedStatement ps = dbConn.prepareStatement(INSERT_SQL)) {
+        ps.setString(1, eventKey);
+        ps.setObject(2, jsonb);
+        ps.setString(3, msg); // XML stored as TEXT
+        ps.executeUpdate();
+      }
+      dbConn.commit();
+    }
+  }
+
+  private static HikariDataSource buildDataSource() {
+    HikariConfig cfg = new HikariConfig();
+    cfg.setJdbcUrl(mustEnv("PG_JDBC_URL"));
+    cfg.setUsername(mustEnv("PG_USERNAME"));
+    cfg.setPassword(mustEnv("PG_PASSWORD"));
+    cfg.setMaximumPoolSize(Integer.parseInt(env("PG_POOL_SIZE", "10")));
+    cfg.setConnectionTimeout(10_000);
+    cfg.setIdleTimeout(60_000);
+    cfg.setMaxLifetime(30 * 60_000);
+    return new HikariDataSource(cfg);
+  }
+
+  // ----------------- Helpers -----------------
+
+  private static boolean isUniqueViolation(PSQLException e) {
+    return "23505".equals(e.getSQLState()); // unique_violation
+  }
+
+  private static boolean isTransientDbProblem(PSQLException e) {
+    String state = e.getSQLState();
+    if (state == null) return false;
+    return state.startsWith("08") || state.startsWith("40") || "57P01".equals(state);
+  }
+
+  private static String headerValueToString(Object v) {
+    if (v == null) return null;
+    if (v instanceof byte[]) return new String((byte[]) v, StandardCharsets.UTF_8);
+    return v.toString();
+  }
+
+  private static String headersToJson(Map<String, Object> headers) {
+    if (headers == null || headers.isEmpty()) return "{}";
+
+    Map<String, Object> safe = new HashMap<>();
+    for (Map.Entry<String, Object> e : headers.entrySet()) {
+      Object v = e.getValue();
+      if (v instanceof byte[]) {
+        safe.put(e.getKey(), Base64.getEncoder().encodeToString((byte[]) v));
+      } else {
+        safe.put(e.getKey(), v);
+      }
+    }
+
+    try {
+      return OBJECT_MAPPER.writeValueAsString(safe);
+    } catch (Exception e) {
+      throw new RuntimeException("Failed to serialize headers to JSON", e);
+    }
   }
 
   // Java 8 replacement for String.isBlank()
@@ -187,90 +246,4 @@ private static String loadSql(String resourcePath) {
     String v = System.getenv(k);
     return isBlank(v) ? def : v;
   }
-
-private static String headerValueToString(Object v) {
-  if (v == null) return "null";
-  if (v instanceof byte[]) return new String((byte[]) v, StandardCharsets.UTF_8);
-  return v.toString();
 }
-
-  // ----------------- DB -----------------
-
-private static void persistEvent(String eventKey, Map<String, Object> headers, String msg) throws SQLException {
-  PGobject jsonb = new PGobject();
-  jsonb.setType("jsonb");
-  jsonb.setValue(headersToJson(headers)); // must be valid JSON
-
-  try (java.sql.Connection dbConn = dataSource.getConnection()) {
-    dbConn.setAutoCommit(false);
-    try (java.sql.PreparedStatement ps = dbConn.prepareStatement(INSERT_SQL)) {
-      ps.setString(1, eventKey);
-      ps.setObject(2, jsonb);
-      ps.setString(3, msg);
-      ps.executeUpdate();
-    }
-    dbConn.commit();
-  }
-}
-
-
-
-
-  private static HikariDataSource buildDataSource() {
-    HikariConfig cfg = new HikariConfig();
-    cfg.setJdbcUrl(mustEnv("jdbc:postgresql://vsemxkph354706231380.ceas0akte0b1.eu-west-1.rds.amazonaws.com:5432/dbo"));          // jdbc:postgresql://host:5432/db
-    cfg.setUsername(mustEnv("impownerbs1"));
-    cfg.setPassword(mustEnv("hbSF0INu8:W7Vk4qQt1kz1LrNcjFuQ"));
-    cfg.setMaximumPoolSize(Integer.parseInt(env("PG_POOL_SIZE", "10")));
-    cfg.setTimeout(10_000);
-    cfg.setIdleTimeout(60_000);
-    cfg.setMaxLifetime(30 * 60_000);
-    return new HikariDataSource(cfg);
-  }
-
-  // ----------------- Helpers -----------------
-
-  private static boolean isUniqueViolation(PSQLException e) {
-    // Postgres UNIQUE violation SQLSTATE = 23505
-    return "23505".equals(e.getSQLState());
-  }
-
-  private static boolean isTransientDbProblem(PSQLException e) {
-    // Common transient classes:
-    // 08xxx = connection exceptions
-    // 40xxx = transaction rollback (serialization/deadlock)
-    String state = e.getSQLState();
-    if (state == null) return false;
-    return state.startsWith("08") || state.startsWith("40") || "57P01".equals(state); // admin shutdown
-  }
-
-
-private static String headersToJson(Map<String, Object> headers) {
-  if (headers == null) return "{}";
-
-  Map<String, Object> safe = new HashMap<>();
-  headers.forEach((k, v) -> {
-    if (v instanceof byte[])
-      safe.put(k, Base64.getEncoder().encodeToString((byte[]) v));
-    else
-      safe.put(k, v);
-  });
-
-  try {
-    return OBJECT_MAPPER.writeValueAsString(safe);
-  } catch (Exception e) {
-    throw new RuntimeException("Failed to serialize headers to JSON", e);
-  }
-}
- 
- private static PGobject toJsonb(Map<String, Object> headers) throws SQLException {
-  PGobject jsonb = new PGobject();
-  jsonb.setType("jsonb");
-  jsonb.setValue(toJson(headers)); // your JSON serialization (ideally Jackson)
-  return jsonb;
-}
-  
-  
-}
-
-
