@@ -105,7 +105,7 @@ public class RabbitConsumer {
 
         // ---- Determine idempotency key ----
 
-        String eventKey = extractTradeIdFromXml(msg);
+        eventKey = extractTradeIdFromXml(msg);
 
         System.out.println("Received tag=" + tag +
             " redelivered=" + delivery.getEnvelope().isRedeliver() +
