@@ -1,5 +1,5 @@
 INSERT INTO imptest.internal_market_poc (
-  event_key,
+  tradeid,
   headers,
   payload_xml
 )
