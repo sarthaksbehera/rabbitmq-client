@@ -14,6 +14,16 @@ import java.sql.SQLException;
 import java.util.Base64;
 import java.util.HashMap;
 import java.util.Map;
+import javax.xml.parsers.DocumentBuilderFactory;
+import javax.xml.parsers.DocumentBuilder;
+import javax.xml.xpath.XPath;
+import javax.xml.xpath.XPathConstants;
+import javax.xml.xpath.XPathFactory;
+
+import org.w3c.dom.Document;
+import org.xml.sax.InputSource;
+
+import java.io.StringReader;
 
 public class RabbitConsumer {
 
@@ -86,7 +96,6 @@ public class RabbitConsumer {
       long tag = delivery.getEnvelope().getDeliveryTag();
 
       AMQP.BasicProperties props = delivery.getProperties();
-      Map<String, Object> headers = props.getHeaders();
 
       // Declare eventKey OUTSIDE try so catch blocks can use it
       String eventKey = null;
@@ -95,27 +104,16 @@ public class RabbitConsumer {
         String msg = new String(delivery.getBody(), StandardCharsets.UTF_8);
 
         // ---- Determine idempotency key ----
-        eventKey = props.getMessageId();
 
-        if (eventKey == null && headers != null) {
-          Object tradeIdHeader = headers.get("tradeId");
-          if (tradeIdHeader != null) {
-            eventKey = headerValueToString(tradeIdHeader);
-          }
-        }
+        String eventKey = extractTradeIdFromXml(msg);
 
-        if (eventKey == null) {
-          eventKey = "rk:" + delivery.getEnvelope().getRoutingKey() + "|tag:" + tag;
-        }
-
-        // (Optional) logging
         System.out.println("Received tag=" + tag +
             " redelivered=" + delivery.getEnvelope().isRedeliver() +
             " eventKey=" + eventKey +
             " bytes=" + delivery.getBody().length);
 
         // ---- Persist FIRST, then ACK ----
-        persistEvent(eventKey, headers, msg);
+        persistEvent(eventKey, msg);
         channel.basicAck(tag, false);
 
         System.out.println("Persisted + ACKed event_key=" + eventKey);
@@ -164,23 +162,49 @@ public class RabbitConsumer {
 
   // ----------------- DB -----------------
 
-  private static void persistEvent(String eventKey, Map<String, Object> headers, String msg) throws SQLException {
-    PGobject jsonb = new PGobject();
-    jsonb.setType("jsonb");
-    jsonb.setValue(headersToJson(headers)); // valid JSON
-
+  private static void persistEvent(String eventKey, String msg) throws SQLException {
     try (java.sql.Connection dbConn = dataSource.getConnection()) {
       dbConn.setAutoCommit(false);
       try (java.sql.PreparedStatement ps = dbConn.prepareStatement(INSERT_SQL)) {
         ps.setString(1, eventKey);
-        ps.setObject(2, jsonb);
-        ps.setString(3, msg); // XML stored as TEXT
+        ps.setString(2, msg); 
         ps.executeUpdate();
       }
       dbConn.commit();
     }
   }
 
+private static String extractTradeIdFromXml(String xml) throws Exception {
+  DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
+
+  // Security hardening (important)
+  dbf.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+  dbf.setFeature("http://xml.org/sax/features/external-general-entities", false);
+  dbf.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
+  dbf.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false);
+  dbf.setXIncludeAware(false);
+  dbf.setExpandEntityReferences(false);
+
+  DocumentBuilder builder = dbf.newDocumentBuilder();
+  Document doc = builder.parse(new InputSource(new StringReader(xml)));
+
+  XPath xpath = XPathFactory.newInstance().newXPath();
+
+  // Adjust XPath if needed
+  String tradeId = (String) xpath.evaluate(
+      "//tradeId/text()",
+      doc,
+      XPathConstants.STRING
+  );
+
+  if (tradeId == null || tradeId.trim().isEmpty()) {
+    throw new IllegalStateException("tradeId not found in XML");
+  }
+
+  return tradeId.trim();
+}
+
+  
   private static HikariDataSource buildDataSource() {
     HikariConfig cfg = new HikariConfig();
     cfg.setJdbcUrl(mustEnv("PG_JDBC_URL"));
