@@ -5,9 +5,11 @@ import com.zaxxer.hikari.HikariDataSource;
 import java.nio.charset.StandardCharsets;
 import java.io.InputStream;
 import org.postgresql.util.PGobject;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 public class RabbitConsumer {
 
+ private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
  private static HikariDataSource dataSource;
 
 private static final String INSERT_SQL = loadSql("/sql/insert_incoming_event.sql");
@@ -230,43 +232,25 @@ private static void persistEvent(String eventKey, Map<String, Object> headers, S
     return state.startsWith("08") || state.startsWith("40") || "57P01".equals(state); // admin shutdown
   }
 
-  private static String headersToJson(Map<String, Object> headers) {
-    if (headers == null || headers.isEmpty()) return "{}";
 
-    StringBuilder sb = new StringBuilder("{");
-    boolean first = true;
+private static String headersToJson(Map<String, Object> headers) {
+  if (headers == null) return "{}";
 
-    for (var e : headers.entrySet()) {
-      if (!first) sb.append(",");
-      first = false;
+  Map<String, Object> safe = new HashMap<>();
+  headers.forEach((k, v) -> {
+    if (v instanceof byte[])
+      safe.put(k, Base64.getEncoder().encodeToString((byte[]) v));
+    else
+      safe.put(k, v);
+  });
 
-      sb.append("\"").append(escapeJson(e.getKey())).append("\":");
-
-      Object v = e.getValue();
-      if (v == null) {
-        sb.append("null");
-      } else if (v instanceof Number || v instanceof Boolean) {
-        sb.append(v);
-      } else if (v instanceof byte[]) {
-        sb.append("\"").append(escapeJson(new String((byte[]) v, StandardCharsets.UTF_8))).append("\"");
-      } else {
-        sb.append("\"").append(escapeJson(v.toString())).append("\"");
-      }
-    }
-
-    sb.append("}");
-    return sb.toString();
+  try {
+    return OBJECT_MAPPER.writeValueAsString(safe);
+  } catch (Exception e) {
+    throw new RuntimeException("Failed to serialize headers to JSON", e);
   }
-
-  private static String escapeJson(String s) {
-    return s
-      .replace("\\", "\\\\")
-      .replace("\"", "\\\"")
-      .replace("\n", "\\n")
-      .replace("\r", "\\r")
-      .replace("\t", "\\t");
-  }
-
+}
+ 
  private static PGobject toJsonb(Map<String, Object> headers) throws SQLException {
   PGobject jsonb = new PGobject();
   jsonb.setType("jsonb");
