@@ -3,11 +3,26 @@ import java.util.Map;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import java.nio.charset.StandardCharsets;
+import java.io.InputStream;
+import org.postgresql.util.PGobject;
 
 public class RabbitConsumer {
 
  private static HikariDataSource dataSource;
-  
+
+private static final String INSERT_SQL = loadSql("/sql/insert_incoming_event.sql");
+
+private static String loadSql(String resourcePath) {
+  try (InputStream is = RabbitConsumer.class.getResourceAsStream(resourcePath)) {
+    if (is == null) {
+      throw new IllegalStateException("SQL resource not found on classpath: " + resourcePath);
+    }
+    return new String(is.readAllBytes(), StandardCharsets.UTF_8);
+  } catch (Exception e) {
+    throw new RuntimeException("Failed to load SQL resource: " + resourcePath, e);
+  }
+}
+
   public static void main(String[] args) throws Exception {
 
     dataSource = buildDataSource();
@@ -166,22 +181,26 @@ private static String headerValueToString(Object v) {
 
   // ----------------- DB -----------------
 
-  private static void persistEvent(String eventKey, Map<String, Object> headers, String msg) throws SQLException {
-    // Table schema expected:
-    // incoming_events(event_key TEXT UNIQUE, headers JSONB, payload_xml TEXT)
-    String sql = "INSERT INTO incoming_events(event_key, headers, payload_xml) VALUES (?, ?::jsonb, ?)";
+private static void persistEvent(String eventKey, Map<String, Object> headers, String msg) throws SQLException {
+  // incoming_events(event_key TEXT UNIQUE, headers JSONB, payload_xml TEXT)
 
-    try (Connection c = dataSource.getConnection()) {
-      c.setAutoCommit(false);
-      try (PreparedStatement ps = c.prepareStatement(sql)) {
-        ps.setString(1, eventKey);
-        ps.setString(2, headersToJson(headers));
-        ps.setString(3, msg);
-        ps.executeUpdate();
-      }
-      c.commit();
+  PGobject jsonb = new PGobject();
+  jsonb.setType("jsonb");
+  jsonb.setValue(headersToJson(headers)); 
+
+  try (Connection c = dataSource.getConnection()) {
+    c.setAutoCommit(false);
+    try (PreparedStatement ps = c.prepareStatement(INSERT_SQL)) {
+      ps.setString(1, eventKey);
+      ps.setObject(2, jsonb);
+      ps.setString(3, msg);
+      ps.executeUpdate();
     }
+    c.commit();
   }
+}
+
+
 
   private static HikariDataSource buildDataSource() {
     HikariConfig cfg = new HikariConfig();
@@ -248,6 +267,12 @@ private static String headerValueToString(Object v) {
       .replace("\t", "\\t");
   }
 
+ private static PGobject toJsonb(Map<String, Object> headers) throws SQLException {
+  PGobject jsonb = new PGobject();
+  jsonb.setType("jsonb");
+  jsonb.setValue(toJson(headers)); // your JSON serialization (ideally Jackson)
+  return jsonb;
+}
   
   
 }
