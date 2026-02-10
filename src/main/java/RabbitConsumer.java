@@ -4,7 +4,11 @@ import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import java.nio.charset.StandardCharsets;
 import java.io.InputStream;
+import java.sql.SQLException;
+import java.util.Base64;
+import java.util.HashMap;
 import org.postgresql.util.PGobject;
+import org.postgresql.util.PSQLException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 public class RabbitConsumer {
@@ -14,16 +18,25 @@ public class RabbitConsumer {
 
 private static final String INSERT_SQL = loadSql("/sql/insert_incoming_event.sql");
 
+private static byte[] readAllBytesJava8(InputStream is) throws java.io.IOException {
+  java.io.ByteArrayOutputStream buffer = new java.io.ByteArrayOutputStream();
+  byte[] data = new byte[8192];
+  int nRead;
+  while ((nRead = is.read(data, 0, data.length)) != -1) {
+    buffer.write(data, 0, nRead);
+  }
+  return buffer.toByteArray();
+}
+ 
 private static String loadSql(String resourcePath) {
   try (InputStream is = RabbitConsumer.class.getResourceAsStream(resourcePath)) {
-    if (is == null) {
-      throw new IllegalStateException("SQL resource not found on classpath: " + resourcePath);
-    }
-    return new String(is.readAllBytes(), StandardCharsets.UTF_8);
+    if (is == null) throw new IllegalStateException("SQL resource not found: " + resourcePath);
+    return new String(readAllBytesJava8(is), java.nio.charset.StandardCharsets.UTF_8);
   } catch (Exception e) {
-    throw new RuntimeException("Failed to load SQL resource: " + resourcePath, e);
+    throw new RuntimeException("Failed to load SQL: " + resourcePath, e);
   }
 }
+
 
   public static void main(String[] args) throws Exception {
 
@@ -53,8 +66,8 @@ private static String loadSql(String resourcePath) {
     factory.useSslProtocol();
     factory.enableHostnameVerification();
 
-    Connection connection = factory.newConnection("rabbit-consumer");
-    Channel channel = connection.createChannel();
+    com.rabbitmq.client.Connection connection = factory.newConnection("rabbit-consumer");
+    com.rabbitmq.client.Channel channel = connection.createChannel();
 
     channel.basicQos(prefetch);
 
@@ -98,7 +111,7 @@ private static String loadSql(String resourcePath) {
   System.out.println("routingKey=" + delivery.getEnvelope().getRoutingKey());     
 
 
-         String eventKey = props.getMessageId();
+  final String eventKey = props.getMessageId();
       if (eventKey == null) {
         Object tradeIdHeader = headers != null ? headers.get("tradeId") : null;
         if (tradeIdHeader != null) {
@@ -148,7 +161,7 @@ private static String loadSql(String resourcePath) {
       } catch (Exception ignored) {}
 
       try { channel.close(); } catch (Exception ignored) {}
-      try { connection.close(); } catch (Exception ignored) {}
+      try { .close(); } catch (Exception ignored) {}
     }));
 
     System.out.println("Consuming from queue: " + queue);
@@ -184,23 +197,22 @@ private static String headerValueToString(Object v) {
   // ----------------- DB -----------------
 
 private static void persistEvent(String eventKey, Map<String, Object> headers, String msg) throws SQLException {
-  // incoming_events(event_key TEXT UNIQUE, headers JSONB, payload_xml TEXT)
-
   PGobject jsonb = new PGobject();
   jsonb.setType("jsonb");
-  jsonb.setValue(headersToJson(headers)); 
+  jsonb.setValue(headersToJson(headers)); // must be valid JSON
 
-  try (Connection c = dataSource.getConnection()) {
-    c.setAutoCommit(false);
-    try (PreparedStatement ps = c.prepareStatement(INSERT_SQL)) {
+  try (java.sql.Connection dbConn = dataSource.getConnection()) {
+    dbConn.setAutoCommit(false);
+    try (java.sql.PreparedStatement ps = dbConn.prepareStatement(INSERT_SQL)) {
       ps.setString(1, eventKey);
       ps.setObject(2, jsonb);
       ps.setString(3, msg);
       ps.executeUpdate();
     }
-    c.commit();
+    dbConn.commit();
   }
 }
+
 
 
 
@@ -210,7 +222,7 @@ private static void persistEvent(String eventKey, Map<String, Object> headers, S
     cfg.setUsername(mustEnv("impownerbs1"));
     cfg.setPassword(mustEnv("hbSF0INu8:W7Vk4qQt1kz1LrNcjFuQ"));
     cfg.setMaximumPoolSize(Integer.parseInt(env("PG_POOL_SIZE", "10")));
-    cfg.setConnectionTimeout(10_000);
+    cfg.setTimeout(10_000);
     cfg.setIdleTimeout(60_000);
     cfg.setMaxLifetime(30 * 60_000);
     return new HikariDataSource(cfg);
