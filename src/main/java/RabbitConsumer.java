@@ -32,6 +32,9 @@ public class RabbitConsumer {
   private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
   private static HikariDataSource dataSource;
 
+  
+  private static final Logger log = LoggerFactory.getLogger(RabbitConsumer.class);
+
   private static final String INSERT_SQL = loadSql("/sql/insert_incoming_event.sql");
 
   // ----------- Java 8 helper (InputStream.readAllBytes replacement) -----------
