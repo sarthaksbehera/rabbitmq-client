@@ -5,9 +5,11 @@ import com.zaxxer.hikari.HikariDataSource;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.postgresql.util.PGobject;
 import org.postgresql.util.PSQLException;
-
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.sql.SQLException;
@@ -90,7 +92,7 @@ public class RabbitConsumer {
 
     // Ensure queue exists (will throw if not)
     channel.queueDeclarePassive(queue);
-    System.out.println("Queue exists: " + queue);
+    log.info("Connected. Queue exists: {}", queue);
 
     DeliverCallback onMessage = (consumerTag, delivery) -> {
       long tag = delivery.getEnvelope().getDeliveryTag();
@@ -107,10 +109,8 @@ public class RabbitConsumer {
 
         eventKey = extractTradeIdFromXml(msg);
 
-        System.out.println("Received tag=" + tag +
-            " redelivered=" + delivery.getEnvelope().isRedeliver() +
-            " eventKey=" + eventKey +
-            " bytes=" + delivery.getBody().length);
+      log.info("[{}] Received message tag={} routingKey={} redelivered={} bytes={}",
+          receivedAt, tag, routingKey, redelivered, delivery.getBody().length);
 
         // ---- Persist FIRST, then ACK ----
         persistEvent(eventKey, msg);
