@@ -5,11 +5,10 @@ import com.zaxxer.hikari.HikariDataSource;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.postgresql.util.PGobject;
 import org.postgresql.util.PSQLException;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.sql.SQLException;
@@ -31,9 +30,6 @@ public class RabbitConsumer {
 
   private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
   private static HikariDataSource dataSource;
-
-  
-  private static final Logger log = LoggerFactory.getLogger(RabbitConsumer.class);
 
   private static final String INSERT_SQL = loadSql("/sql/insert_incoming_event.sql");
 
@@ -95,12 +91,16 @@ public class RabbitConsumer {
 
     // Ensure queue exists (will throw if not)
     channel.queueDeclarePassive(queue);
-    log.info("Connected. Queue exists: {}", queue);
+    System.out.println("Queue exists: " + queue);
 
     DeliverCallback onMessage = (consumerTag, delivery) -> {
       long tag = delivery.getEnvelope().getDeliveryTag();
 
       AMQP.BasicProperties props = delivery.getProperties();
+  String receivedAt = ZonedDateTime.now()
+      .format(DateTimeFormatter.ISO_OFFSET_DATE_TIME);
+
+  System.out.println("[" + receivedAt + "] Message received from RabbitMQ");
 
       // Declare eventKey OUTSIDE try so catch blocks can use it
       String eventKey = null;
@@ -112,8 +112,10 @@ public class RabbitConsumer {
 
         eventKey = extractTradeIdFromXml(msg);
 
-      log.info("[{}] Received message tag={} routingKey={} redelivered={} bytes={}",
-          receivedAt, tag, routingKey, redelivered, delivery.getBody().length);
+        System.out.println("Received tag=" + tag +
+            " redelivered=" + delivery.getEnvelope().isRedeliver() +
+            " eventKey=" + eventKey +
+            " bytes=" + delivery.getBody().length);
 
         // ---- Persist FIRST, then ACK ----
         persistEvent(eventKey, msg);
