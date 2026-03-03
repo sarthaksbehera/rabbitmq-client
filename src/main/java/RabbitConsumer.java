@@ -91,13 +91,12 @@ public class RabbitConsumer {
 
       System.out.println("[" + receivedAt + "] Message received from RabbitMQ tag=" + tag);
 
-      String eventKey = null;
+      String eventKey = tag;
 
       try {
         String xml = new String(delivery.getBody(), StandardCharsets.UTF_8);
 
         // tradeId from XML becomes our idempotency key
-        eventKey = extractFromXml(xml, TRADE_ID_XPATH);
 
         // 1) Persist to Postgres
         persistEvent(eventKey, xml, queue);
