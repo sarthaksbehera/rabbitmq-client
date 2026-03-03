@@ -84,7 +84,7 @@ public class RabbitConsumer {
     System.out.println("Connected to RabbitMQ. Queue exists: " + queue);
 
     DeliverCallback onMessage = (consumerTag, delivery) -> {
-      long tag = delivery.getEnvelope().getDeliveryTag();
+      String tag = delivery.getEnvelope().getDeliveryTag();
 
       String receivedAt = ZonedDateTime.now()
           .format(DateTimeFormatter.ISO_OFFSET_DATE_TIME);
