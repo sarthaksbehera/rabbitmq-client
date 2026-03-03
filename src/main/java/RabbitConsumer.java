@@ -91,8 +91,6 @@ public class RabbitConsumer {
 
       System.out.println("[" + receivedAt + "] Message received from RabbitMQ tag=" + tag);
 
-      String tag = tag.toString();
-
       try {
         String xml = new String(delivery.getBody(), StandardCharsets.UTF_8);
 
