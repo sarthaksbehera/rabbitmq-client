@@ -91,7 +91,7 @@ public class RabbitConsumer {
 
       System.out.println("[" + receivedAt + "] Message received from RabbitMQ tag=" + tag);
 
-      String eventKey = tag.toString();
+      String tag = tag.toString();
 
       try {
         String xml = new String(delivery.getBody(), StandardCharsets.UTF_8);
@@ -99,44 +99,44 @@ public class RabbitConsumer {
         // tradeId from XML becomes our idempotency key
 
         // 1) Persist to Postgres
-        persistEvent(eventKey, xml, queue);
+        persistEvent(tag, xml, queue);
 
         // 2) Publish to AMQ Topic over AMQPS
-        publishToAmqTopic(eventKey, xml);
+        publishToAmqTopic(tag, xml);
 
         // 3) ACK Rabbit only after DB + AMQ succeed
         channel.basicAck(tag, false);
 
-        System.out.println("Persisted + published to AMQ topic + ACKed eventKey=" + eventKey);
+        System.out.println("Persisted + published to AMQ topic + ACKed tag=" + tag);
 
       } catch (PSQLException e) {
         if (isUniqueViolation(e)) {
           // Already in DB. Still publish to AMQ; if publish succeeds, ACK.
           try {
             String xml = new String(delivery.getBody(), StandardCharsets.UTF_8);
-            if (eventKey == null) eventKey = tag;
+            if (tag == null) tag = tag;
 
-            publishToAmqTopic(eventKey, xml);
+            publishToAmqTopic(tag, xml);
             channel.basicAck(tag, false);
 
-            System.out.println("Duplicate DB row; published to AMQ topic + ACKed eventKey=" + eventKey);
+            System.out.println("Duplicate DB row; published to AMQ topic + ACKed tag=" + tag);
           } catch (Exception ex) {
             channel.basicNack(tag, false, true);
-            System.err.println("DB duplicate but AMQ publish failed; NACK requeue=true eventKey=" + eventKey +
+            System.err.println("DB duplicate but AMQ publish failed; NACK requeue=true tag=" + tag +
                 " err=" + ex.getMessage());
           }
         } else if (isTransientDbProblem(e)) {
           channel.basicNack(tag, false, true);
-          System.err.println("Transient DB error; NACK requeue=true eventKey=" + eventKey + " err=" + e.getMessage());
+          System.err.println("Transient DB error; NACK requeue=true tag=" + tag + " err=" + e.getMessage());
         } else {
           channel.basicNack(tag, false, false);
-          System.err.println("Non-transient DB error; NACK requeue=false eventKey=" + eventKey + " err=" + e.getMessage());
+          System.err.println("Non-transient DB error; NACK requeue=false tag=" + tag + " err=" + e.getMessage());
         }
 
       } catch (Exception e) {
         // If AMQ is temporarily unavailable you might want requeue=true
         channel.basicNack(tag, false, true);
-        System.err.println("Processing failed; NACK requeue=true eventKey=" + eventKey + " err=" + e.getMessage());
+        System.err.println("Processing failed; NACK requeue=true tag=" + tag + " err=" + e.getMessage());
       }
     };
 
@@ -196,11 +196,11 @@ public class RabbitConsumer {
 
   // -------------------- DB --------------------
 
-  private static void persistEvent(String eventKey, String xml, String queue) throws SQLException {
+  private static void persistEvent(String tag, String xml, String queue) throws SQLException {
     try (java.sql.Connection dbConn = dataSource.getConnection()) {
       dbConn.setAutoCommit(false);
       try (java.sql.PreparedStatement ps = dbConn.prepareStatement(INSERT_SQL)) {
-        ps.setString(1, eventKey);
+        ps.setString(1, tag);
         ps.setString(2, xml);
         ps.setString(3, queue);
         ps.executeUpdate();
