@@ -97,7 +97,7 @@ public class RabbitConsumer {
         String xml = new String(delivery.getBody(), StandardCharsets.UTF_8);
 
         // tradeId from XML becomes our idempotency key
-        eventKey = tag.toString();
+        eventKey = String.valueOf(tag);
 
         // 1) Persist to Postgres
         persistEvent(eventKey, xml, queue);
@@ -115,7 +115,7 @@ public class RabbitConsumer {
           // Already in DB. Still publish to AMQ; if publish succeeds, ACK.
           try {
             String xml = new String(delivery.getBody(), StandardCharsets.UTF_8);
-            if (eventKey == null) eventKey = tag.toString();
+          if (eventKey == null) eventKey = String.valueOf(tag);
 
             publishToAmqTopic(eventKey, xml);
             channel.basicAck(tag, false);
