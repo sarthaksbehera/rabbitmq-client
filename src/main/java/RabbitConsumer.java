@@ -114,7 +114,7 @@ public class RabbitConsumer {
           // Already in DB. Still publish to AMQ; if publish succeeds, ACK.
           try {
             String xml = new String(delivery.getBody(), StandardCharsets.UTF_8);
-            if (eventKey == null) eventKey = extractFromXml(xml, TRADE_ID_XPATH);
+            if (eventKey == null) eventKey = tag;
 
             publishToAmqTopic(eventKey, xml);
             channel.basicAck(tag, false);
